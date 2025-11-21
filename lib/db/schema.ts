@@ -17,6 +17,10 @@ export const user = pgTable("User", {
   id: uuid("id").primaryKey().notNull().defaultRandom(),
   email: varchar("email", { length: 64 }).notNull(),
   password: varchar("password", { length: 64 }),
+  role: varchar("role", { enum: ["user", "admin", "owner"] })
+    .notNull()
+    .default("user"),
+  createdAt: timestamp("createdAt").notNull().defaultNow(),
 });
 
 export type User = InferSelectModel<typeof user>;
@@ -171,3 +175,21 @@ export const stream = pgTable(
 );
 
 export type Stream = InferSelectModel<typeof stream>;
+
+export const inviteCode = pgTable("InviteCode", {
+  id: uuid("id").primaryKey().notNull().defaultRandom(),
+  code: varchar("code", { length: 32 }).notNull().unique(),
+  createdAt: timestamp("createdAt").notNull().defaultNow(),
+  usedAt: timestamp("usedAt"),
+  usedBy: uuid("usedBy").references(() => user.id),
+  createdBy: uuid("createdBy").references(() => user.id),
+  maxUses: varchar("maxUses", { length: 10 }).default("1"),
+  currentUses: varchar("currentUses", { length: 10 }).default("0"),
+  expiresAt: timestamp("expiresAt"),
+  isActive: boolean("isActive").notNull().default(true),
+  role: varchar("role", { enum: ["user", "admin", "owner"] })
+    .notNull()
+    .default("user"),
+});
+
+export type InviteCode = InferSelectModel<typeof inviteCode>;

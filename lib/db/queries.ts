@@ -31,6 +31,8 @@ import {
   type User,
   user,
   vote,
+  inviteCode,
+  type InviteCode,
 } from "./schema";
 import { generateHashedPassword } from "./utils";
 
@@ -53,13 +55,25 @@ export async function getUser(email: string): Promise<User[]> {
   }
 }
 
-export async function createUser(email: string, password: string) {
+export async function createUser(email: string, password: string, role: 'user' | 'admin' | 'owner' = 'user') {
   const hashedPassword = generateHashedPassword(password);
 
   try {
-    return await db.insert(user).values({ email, password: hashedPassword });
+    return await db.insert(user).values({ email, password: hashedPassword, role }).returning();
   } catch (_error) {
     throw new ChatSDKError("bad_request:database", "Failed to create user");
+  }
+}
+
+export async function createUserFromAuth0(auth0Id: string, email: string, role: 'user' | 'admin' | 'owner' = 'user') {
+  try {
+    return await db.insert(user).values({
+      id: auth0Id, // Use Auth0 ID as the user ID
+      email,
+      role
+    }).returning();
+  } catch (_error) {
+    throw new ChatSDKError("bad_request:database", "Failed to create user from Auth0");
   }
 }
 
@@ -588,6 +602,147 @@ export async function getStreamIdsByChatId({ chatId }: { chatId: string }) {
     throw new ChatSDKError(
       "bad_request:database",
       "Failed to get stream ids by chat id"
+    );
+  }
+}
+
+// Invite Code Functions
+
+export async function getInviteCodeByCode(code: string): Promise<InviteCode | null> {
+  try {
+    const [inviteCodeResult] = await db
+      .select()
+      .from(inviteCode)
+      .where(eq(inviteCode.code, code));
+    return inviteCodeResult || null;
+  } catch (_error) {
+    throw new ChatSDKError(
+      "bad_request:database",
+      "Failed to get invite code"
+    );
+  }
+}
+
+export async function validateInviteCode(code: string): Promise<boolean> {
+  try {
+    const inviteCodeResult = await getInviteCodeByCode(code);
+
+    if (!inviteCodeResult) {
+      return false;
+    }
+
+    // Check if code is active
+    if (!inviteCodeResult.isActive) {
+      return false;
+    }
+
+    // Check if code has expired
+    if (inviteCodeResult.expiresAt && new Date(inviteCodeResult.expiresAt) < new Date()) {
+      return false;
+    }
+
+    // Check if code has reached max uses
+    const maxUses = Number.parseInt(inviteCodeResult.maxUses || "1", 10);
+    const currentUses = Number.parseInt(inviteCodeResult.currentUses || "0", 10);
+
+    if (currentUses >= maxUses) {
+      return false;
+    }
+
+    return true;
+  } catch (_error) {
+    throw new ChatSDKError(
+      "bad_request:database",
+      "Failed to validate invite code"
+    );
+  }
+}
+
+export async function useInviteCode({ code, userId }: { code: string; userId: string }) {
+  try {
+    const inviteCodeResult = await getInviteCodeByCode(code);
+
+    if (!inviteCodeResult) {
+      throw new ChatSDKError("not_found:database", "Invite code not found");
+    }
+
+    const currentUses = Number.parseInt(inviteCodeResult.currentUses || "0", 10);
+    const maxUses = Number.parseInt(inviteCodeResult.maxUses || "1", 10);
+
+    // Update the invite code
+    await db
+      .update(inviteCode)
+      .set({
+        currentUses: (currentUses + 1).toString(),
+        usedAt: new Date(),
+        usedBy: userId,
+        isActive: currentUses + 1 >= maxUses ? false : inviteCodeResult.isActive,
+      })
+      .where(eq(inviteCode.code, code));
+
+    return inviteCodeResult;
+  } catch (_error) {
+    throw new ChatSDKError(
+      "bad_request:database",
+      "Failed to use invite code"
+    );
+  }
+}
+
+export async function createInviteCode({
+  code,
+  createdBy,
+  maxUses = "1",
+  expiresAt,
+}: {
+  code: string;
+  createdBy?: string;
+  maxUses?: string;
+  expiresAt?: Date;
+}) {
+  try {
+    const [newInviteCode] = await db
+      .insert(inviteCode)
+      .values({
+        code,
+        createdBy,
+        maxUses,
+        expiresAt,
+        currentUses: "0",
+        isActive: true,
+      })
+      .returning();
+
+    return newInviteCode;
+  } catch (_error) {
+    throw new ChatSDKError(
+      "bad_request:database",
+      "Failed to create invite code"
+    );
+  }
+}
+
+export async function getAllInviteCodes(): Promise<InviteCode[]> {
+  try {
+    return await db.select().from(inviteCode).orderBy(desc(inviteCode.createdAt));
+  } catch (_error) {
+    throw new ChatSDKError(
+      "bad_request:database",
+      "Failed to get invite codes"
+    );
+  }
+}
+
+export async function deactivateInviteCode(code: string) {
+  try {
+    await db
+      .update(inviteCode)
+      .set({ isActive: false })
+      .where(eq(inviteCode.code, code));
+  } catch (_error) {
+    throw new ChatSDKError(
+      "bad_request:database",
+      "Failed to deactivate invite code"
     );
   }
 }

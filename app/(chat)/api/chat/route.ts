@@ -16,7 +16,10 @@ import {
 import type { ModelCatalog } from "tokenlens/core";
 import { fetchModels } from "tokenlens/fetch";
 import { getUsage } from "tokenlens/helpers";
-import { auth, type UserType } from "@/app/(auth)/auth";
+import { auth } from "@/lib/auth";
+
+// Map our role system to the entitlements UserType
+type UserType = "guest" | "regular";
 import type { VisibilityType } from "@/components/visibility-selector";
 import { entitlementsByUserType } from "@/lib/ai/entitlements";
 import type { ChatModel } from "@/lib/ai/models";
@@ -114,7 +117,9 @@ export async function POST(request: Request) {
       return new ChatSDKError("unauthorized:chat").toResponse();
     }
 
-    const userType: UserType = session.user.type;
+    // Map our role-based system to entitlements
+    // For now, treat all authenticated users as "regular" (not guest)
+    const userType: UserType = "regular";
 
     const messageCount = await getMessageCountByUserId({
       id: session.user.id,

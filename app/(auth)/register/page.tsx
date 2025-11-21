@@ -2,51 +2,106 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useSession } from "next-auth/react";
-import { useActionState, useEffect, useState } from "react";
-import { AuthForm } from "@/components/auth-form";
-import { SubmitButton } from "@/components/submit-button";
-import { toast } from "@/components/toast";
-import { type RegisterActionState, register } from "../actions";
+import { useState } from "react";
+import { signIn } from "next-auth/react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { toast } from "sonner";
 
 export default function Page() {
   const router = useRouter();
-
+  const [inviteCode, setInviteCode] = useState("");
   const [email, setEmail] = useState("");
-  const [isSuccessful, setIsSuccessful] = useState(false);
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [step, setStep] = useState<"invite" | "credentials">("invite");
+  const [isValidating, setIsValidating] = useState(false);
+  const [isCreatingAccount, setIsCreatingAccount] = useState(false);
 
-  const [state, formAction] = useActionState<RegisterActionState, FormData>(
-    register,
-    {
-      status: "idle",
+  const handleValidateCode = async () => {
+    if (!inviteCode.trim()) {
+      toast.error("Please enter an invite code");
+      return;
     }
-  );
 
-  const { update: updateSession } = useSession();
-
-  useEffect(() => {
-    if (state.status === "user_exists") {
-      toast({ type: "error", description: "Account already exists!" });
-    } else if (state.status === "failed") {
-      toast({ type: "error", description: "Failed to create account!" });
-    } else if (state.status === "invalid_data") {
-      toast({
-        type: "error",
-        description: "Failed validating your submission!",
+    setIsValidating(true);
+    try {
+      const response = await fetch("/api/invite-code/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: inviteCode }),
       });
-    } else if (state.status === "success") {
-      toast({ type: "success", description: "Account created successfully!" });
 
-      setIsSuccessful(true);
-      updateSession();
-      router.refresh();
+      const data = await response.json();
+
+      if (data.valid) {
+        toast.success("Invite code validated!");
+        setStep("credentials");
+      } else {
+        toast.error("Invalid or expired invite code");
+      }
+    } catch (error) {
+      console.error("Error validating invite code:", error);
+      toast.error("Error validating invite code");
+    } finally {
+      setIsValidating(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.status]);
+  };
 
-  const handleSubmit = (formData: FormData) => {
-    setEmail(formData.get("email") as string);
-    formAction(formData);
+  const handleCreateAccount = async () => {
+    if (!email.trim() || !password.trim() || !confirmPassword.trim()) {
+      toast.error("Please fill in all fields");
+      return;
+    }
+
+    if (password.length < 8) {
+      toast.error("Password must be at least 8 characters");
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      toast.error("Passwords do not match");
+      return;
+    }
+
+    setIsCreatingAccount(true);
+    try {
+      const response = await fetch("/api/auth/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password, inviteCode }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        toast.success("Account created! Signing you in...");
+
+        // Automatically sign in the user
+        const signInResult = await signIn("credentials", {
+          email,
+          password,
+          redirect: false,
+        });
+
+        if (signInResult?.error) {
+          toast.error("Account created but sign-in failed. Please try logging in manually.");
+          router.push("/login");
+        } else {
+          toast.success("Signed in! Redirecting to chat...");
+          router.push("/chat");
+          router.refresh();
+        }
+      } else {
+        toast.error(data.error || "Failed to create account");
+      }
+    } catch (error) {
+      console.error("Error creating account:", error);
+      toast.error("Error creating account");
+    } finally {
+      setIsCreatingAccount(false);
+    }
   };
 
   return (
@@ -55,11 +110,82 @@ export default function Page() {
         <div className="flex flex-col items-center justify-center gap-2 px-4 text-center sm:px-16">
           <h3 className="font-semibold text-xl dark:text-zinc-50">Sign Up</h3>
           <p className="text-gray-500 text-sm dark:text-zinc-400">
-            Create an account with your email and password
+            {step === "invite"
+              ? "Enter your invite code to create an account"
+              : "Create your account credentials"}
           </p>
         </div>
-        <AuthForm action={handleSubmit} defaultEmail={email}>
-          <SubmitButton isSuccessful={isSuccessful}>Sign Up</SubmitButton>
+        <div className="flex flex-col gap-4 px-4 sm:px-16">
+          {step === "invite" ? (
+            <>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="inviteCode">Invite Code</Label>
+                <Input
+                  id="inviteCode"
+                  type="text"
+                  placeholder="Enter your invite code"
+                  value={inviteCode}
+                  onChange={(e) => setInviteCode(e.target.value)}
+                  disabled={isValidating}
+                />
+              </div>
+              <Button
+                onClick={handleValidateCode}
+                disabled={isValidating || !inviteCode.trim()}
+              >
+                {isValidating ? "Validating..." : "Continue"}
+              </Button>
+            </>
+          ) : (
+            <>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="email">Email</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  placeholder="Enter your email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  disabled={isCreatingAccount}
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="password">Password</Label>
+                <Input
+                  id="password"
+                  type="password"
+                  placeholder="Enter your password (min 8 characters)"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  disabled={isCreatingAccount}
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="confirmPassword">Confirm Password</Label>
+                <Input
+                  id="confirmPassword"
+                  type="password"
+                  placeholder="Re-enter your password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  disabled={isCreatingAccount}
+                />
+              </div>
+              <Button
+                onClick={handleCreateAccount}
+                disabled={isCreatingAccount || !email.trim() || !password.trim() || !confirmPassword.trim()}
+              >
+                {isCreatingAccount ? "Creating Account..." : "Create Account"}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => setStep("invite")}
+                disabled={isCreatingAccount}
+              >
+                Back
+              </Button>
+            </>
+          )}
           <p className="mt-4 text-center text-gray-600 text-sm dark:text-zinc-400">
             {"Already have an account? "}
             <Link
@@ -70,7 +196,7 @@ export default function Page() {
             </Link>
             {" instead."}
           </p>
-        </AuthForm>
+        </div>
       </div>
     </div>
   );
